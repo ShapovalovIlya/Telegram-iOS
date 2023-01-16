@@ -9,6 +9,7 @@ import TelegramPresentationData
 import ItemListUI
 import PresentationDataUtils
 import TelegramStringFormatting
+import TimeModule
 
 public class ItemListCallListItem: ListViewItem, ItemListItem {
     let presentationData: ItemListPresentationData
@@ -133,6 +134,8 @@ public class ItemListCallListItemNode: ListViewItemNode {
     private let accessibilityArea: AccessibilityAreaNode
     
     private var item: ItemListCallListItem?
+    private let timeManager = TimeManager()
+    private let timeDisposable = MetaDisposable()
     
     override public var canBeSelected: Bool {
         return false
@@ -152,6 +155,7 @@ public class ItemListCallListItemNode: ListViewItemNode {
         self.titleNode = TextNode()
         self.titleNode.isUserInteractionEnabled = false
         self.titleNode.isAccessibilityElement = false
+        self.titleNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.0)
         
         self.callNodes = []
         
@@ -164,7 +168,6 @@ public class ItemListCallListItemNode: ListViewItemNode {
     }
     
     public func asyncLayout() -> (_ item: ItemListCallListItem, _ params: ListViewItemLayoutParams, _ insets: ItemListNeighbors) -> (ListViewItemNodeLayout, () -> Void) {
-        let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
         let currentItem = self.item
         
         return { [weak self] item, params, neighbors in
@@ -232,11 +235,14 @@ public class ItemListCallListItemNode: ListViewItemNode {
                 insets = UIEdgeInsets()
             }
             
-            let earliestMessage = item.messages.sorted(by: {$0.timestamp < $1.timestamp}).first!
-            let titleText = stringForDate(timestamp: earliestMessage.timestamp, strings: item.presentationData.strings)
-            let (titleLayout, titleApply) = makeTitleLayout(TextNodeLayoutArguments(attributedString: NSAttributedString(string: titleText, font: titleFont, textColor: item.presentationData.theme.list.itemPrimaryTextColor), backgroundColor: nil, maximumNumberOfLines: 1, truncationType: .end, constrainedSize: CGSize(width: params.width - params.rightInset - 20.0 - leftInset, height: CGFloat.greatestFiniteMagnitude), alignment: .natural, cutout: nil, insets: UIEdgeInsets()))
-            
-            contentHeight += titleLayout.size.height + 18.0
+            if let strongSelf = self {
+                strongSelf.update(
+                    titleNode: strongSelf.titleNode,
+                    leftInset: leftInset,
+                    params: params,
+                    font: titleFont,
+                    textColor: item.presentationData.theme.list.itemPrimaryTextColor)
+            }
             
             var index = 0
             var nodesLayout: [(TextNodeLayout, TextNodeLayout)] = []
@@ -271,8 +277,6 @@ public class ItemListCallListItemNode: ListViewItemNode {
                         strongSelf.bottomStripeNode.backgroundColor = itemSeparatorColor
                         strongSelf.backgroundNode.backgroundColor = itemBackgroundColor
                     }
-                    
-                    let _ = titleApply()
                     
                     for apply in nodesApply {
                         let _ = apply.0()
@@ -323,8 +327,6 @@ public class ItemListCallListItemNode: ListViewItemNode {
                         strongSelf.bottomStripeNode.frame = CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: params.width - bottomStripeInset, height: separatorHeight))
                     }
                     
-                    strongSelf.titleNode.frame = CGRect(origin: CGPoint(x: leftInset, y: 8.0), size: titleLayout.size)
-                    
                     var index = 0
                     var yOffset = strongSelf.titleNode.frame.maxY + 10.0
                     for nodes in strongSelf.callNodes {
@@ -353,5 +355,52 @@ public class ItemListCallListItemNode: ListViewItemNode {
     override public func animateRemoved(_ currentTimestamp: Double, duration: Double) {
         self.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false)
     }
+    
+    private func update(
+        titleNode: TextNode,
+        leftInset: CGFloat,
+        params: ListViewItemLayoutParams,
+        font: UIFont,
+        textColor: UIColor
+    ) {
+        let makeTitleLayout = TextNode.asyncLayout(self.titleNode)
+        self.timeDisposable.set((self.timeManager.timeSignal() |> deliverOnMainQueue).start(next: { [weak self] date in
+            guard let strongSelf = self else {
+                return
+            }
+            
+            if strongSelf.titleNode.frame.height == 0 {
+                
+                strongSelf.titleNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.5)
+                
+                let attributedString = NSAttributedString(
+                    string: date.datetime.toWorldTimeStyle,
+                    font: font,
+                    textColor: textColor)
+                
+                let constrainedSize = CGSize(
+                    width: params.width - params.rightInset - 20.0 - leftInset,
+                    height: CGFloat.greatestFiniteMagnitude)
+                
+                let layoutArguments = TextNodeLayoutArguments(
+                    attributedString: attributedString,
+                    backgroundColor: nil,
+                    maximumNumberOfLines: 1,
+                    truncationType: .end,
+                    constrainedSize: constrainedSize,
+                    alignment: .natural,
+                    cutout: nil,
+                    insets: UIEdgeInsets())
+                
+                let (titleLayout, titleApply) = makeTitleLayout(layoutArguments)
+                let _ = titleApply()
+                
+                strongSelf.titleNode.frame = CGRect(
+                    origin: CGPoint(x: leftInset, y: 8.0),
+                    size: titleLayout.size)
+            }
+        }))
+    }
+    
 }
 
